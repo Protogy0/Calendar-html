@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Trash2, Activity, FileText, Search } from 'lucide-react';
 import { getResidents, getNotes, addNote, deleteNote, getVitals, addVitals } from '../store';
 
@@ -147,44 +147,56 @@ const noteTypeColor = {
 };
 
 export default function ClinicalNotes() {
-  const residents = getResidents();
+  const [residents, setResidents] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [vitals, setVitals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [tab, setTab] = useState('notes');
   const [showNoteForm, setShowNoteForm] = useState(false);
   const [showVitalsForm, setShowVitalsForm] = useState(false);
-  const [notes, setNotes] = useState(() => getNotes());
-  const [vitals, setVitals] = useState(() => getVitals());
   const [filterResident, setFilterResident] = useState('');
   const [filterType, setFilterType] = useState('');
   const [search, setSearch] = useState('');
 
-  const filteredNotes = notes
-    .filter(n =>
-      (!filterResident || n.residentId === filterResident) &&
-      (!filterType || n.type === filterType) &&
-      (!search || n.content.toLowerCase().includes(search.toLowerCase()) || (n.author || '').toLowerCase().includes(search.toLowerCase()))
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  useEffect(() => {
+    Promise.all([getResidents(), getNotes(), getVitals()])
+      .then(([r, n, v]) => {
+        setResidents(r);
+        setNotes(n);
+        setVitals(v);
+        setLoading(false);
+      })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, []);
 
-  const filteredVitals = vitals
-    .filter(v => !filterResident || v.residentId === filterResident)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const filteredNotes = notes.filter(n =>
+    (!filterResident || n.residentId === filterResident) &&
+    (!filterType || n.type === filterType) &&
+    (!search || n.content.toLowerCase().includes(search.toLowerCase()) || (n.author || '').toLowerCase().includes(search.toLowerCase()))
+  );
 
-  function handleAddNote(data) {
-    addNote(data);
-    setNotes(getNotes());
+  const filteredVitals = vitals.filter(v => !filterResident || v.residentId === filterResident);
+
+  async function handleAddNote(data) {
+    await addNote(data);
+    const updated = await getNotes();
+    setNotes(updated);
     setShowNoteForm(false);
   }
 
-  function handleAddVitals(data) {
-    addVitals(data);
-    setVitals(getVitals());
+  async function handleAddVitals(data) {
+    await addVitals(data);
+    const updated = await getVitals();
+    setVitals(updated);
     setShowVitalsForm(false);
   }
 
-  function handleDeleteNote(id) {
+  async function handleDeleteNote(id) {
     if (confirm('Delete this note?')) {
-      deleteNote(id);
-      setNotes(getNotes());
+      await deleteNote(id);
+      const updated = await getNotes();
+      setNotes(updated);
     }
   }
 
@@ -192,6 +204,9 @@ export default function ClinicalNotes() {
     const r = residents.find(r => r.id === id);
     return r ? `${r.firstName} ${r.lastName}` : 'Unknown';
   }
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading…</div>;
+  if (error) return <div className="text-red-600 p-4 text-sm">Error: {error}</div>;
 
   return (
     <div className="space-y-5">

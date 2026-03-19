@@ -1,22 +1,31 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, ChevronRight, UserPlus } from 'lucide-react';
+import { Search, UserPlus, ChevronRight } from 'lucide-react';
 import { getResidents, addResident } from '../store';
 import ResidentForm from '../components/ResidentForm';
 
 export default function Residents() {
   const navigate = useNavigate();
-  const [residents, setResidents] = useState(getResidents);
+  const [residents, setResidents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+
+  useEffect(() => {
+    getResidents()
+      .then(data => { setResidents(data); setLoading(false); })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, []);
 
   const filtered = residents.filter(r =>
     `${r.firstName} ${r.lastName} ${r.roomNumber}`.toLowerCase().includes(search.toLowerCase())
   );
 
-  function handleAdd(data) {
-    const newR = addResident(data);
-    setResidents(getResidents());
+  async function handleAdd(data) {
+    await addResident(data);
+    const updated = await getResidents();
+    setResidents(updated);
     setShowForm(false);
   }
 
@@ -26,6 +35,9 @@ export default function Residents() {
     Low: 'bg-green-100 text-green-700',
     Respite: 'bg-purple-100 text-purple-700',
   };
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading…</div>;
+  if (error) return <div className="text-red-600 p-4 text-sm">Error: {error}</div>;
 
   return (
     <div className="space-y-5">

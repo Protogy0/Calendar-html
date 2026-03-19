@@ -1,8 +1,10 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { Outlet, NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, Pill, FileText, CalendarDays, Heart, Menu, X
+  LayoutDashboard, Users, Pill, FileText, CalendarDays, Heart, Menu, LogOut
 } from 'lucide-react';
 import { useState } from 'react';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
 
 const nav = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -14,6 +16,9 @@ const nav = [
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user } = useAuth();
+
+  const handleLogout = () => supabase.auth.signOut();
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-100">
@@ -61,15 +66,22 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-blue-700 text-xs text-blue-400">
-          v1.0 &nbsp;|&nbsp; Data stored locally
+        {/* User + Logout */}
+        <div className="px-4 py-4 border-t border-blue-700">
+          <div className="text-xs text-blue-300 truncate mb-2">{user?.email}</div>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 text-blue-200 hover:text-white text-xs font-medium transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+            Sign out
+          </button>
         </div>
       </aside>
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
+        {/* Top bar (mobile) */}
         <header className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-4 lg:hidden">
           <button
             onClick={() => setSidebarOpen(true)}

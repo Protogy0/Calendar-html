@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
@@ -50,7 +50,7 @@ function ApptForm({ residents, initial, onSave, onClose }) {
               <select
                 required
                 value={form.residentName}
-                onChange={e => { set('residentName', e.target.value); }}
+                onChange={e => set('residentName', e.target.value)}
                 onBlur={autoTitle}
                 className={inputCls}
               >
@@ -142,12 +142,24 @@ function ApptDetail({ appt, onEdit, onDelete, onClose }) {
 }
 
 export default function Appointments() {
-  const residents = getResidents();
-  const [appts, setAppts] = useState(getAppointments);
+  const [residents, setResidents] = useState([]);
+  const [appts, setAppts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [selectedAppt, setSelectedAppt] = useState(null);
   const [editAppt, setEditAppt] = useState(null);
   const calRef = useRef(null);
+
+  useEffect(() => {
+    Promise.all([getResidents(), getAppointments()])
+      .then(([r, a]) => {
+        setResidents(r);
+        setAppts(a);
+        setLoading(false);
+      })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, []);
 
   const events = appts.map(a => ({
     id: a.id,
@@ -158,26 +170,32 @@ export default function Appointments() {
     extendedProps: { residentName: a.residentName, type: a.type, location: a.location, notes: a.notes },
   }));
 
-  function handleAdd(data) {
-    addAppointment(data);
-    setAppts(getAppointments());
+  async function handleAdd(data) {
+    await addAppointment(data);
+    const updated = await getAppointments();
+    setAppts(updated);
     setShowForm(false);
   }
 
-  function handleEdit(data) {
-    updateAppointment(editAppt.id, data);
-    setAppts(getAppointments());
+  async function handleEdit(data) {
+    await updateAppointment(editAppt.id, data);
+    const updated = await getAppointments();
+    setAppts(updated);
     setEditAppt(null);
     setSelectedAppt(null);
   }
 
-  function handleDelete(id) {
+  async function handleDelete(id) {
     if (confirm('Delete this appointment?')) {
-      deleteAppointment(id);
-      setAppts(getAppointments());
+      await deleteAppointment(id);
+      const updated = await getAppointments();
+      setAppts(updated);
       setSelectedAppt(null);
     }
   }
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading…</div>;
+  if (error) return <div className="text-red-600 p-4 text-sm">Error: {error}</div>;
 
   const today = new Date().toISOString().split('T')[0];
   const upcoming = appts.filter(a => a.start >= today).sort((a, b) => a.start.localeCompare(b.start));

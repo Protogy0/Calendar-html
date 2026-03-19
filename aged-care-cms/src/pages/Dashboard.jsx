@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, Pill, FileText, CalendarDays, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Users, Pill, FileText, CalendarDays, AlertTriangle } from 'lucide-react';
 import { getResidents, getMedications, getNotes, getAppointments } from '../store';
 
 function StatCard({ icon: Icon, label, value, color, onClick }) {
@@ -22,10 +22,27 @@ function StatCard({ icon: Icon, label, value, color, onClick }) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const residents = getResidents();
-  const medications = getMedications();
-  const notes = getNotes();
-  const appointments = getAppointments();
+  const [residents, setResidents] = useState([]);
+  const [medications, setMedications] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [appointments, setAppointments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    Promise.all([getResidents(), getMedications(), getNotes(), getAppointments()])
+      .then(([r, m, n, a]) => {
+        setResidents(r);
+        setMedications(m);
+        setNotes(n);
+        setAppointments(a);
+        setLoading(false);
+      })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, []);
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading…</div>;
+  if (error) return <div className="text-red-600 p-4 text-sm">Error: {error}</div>;
 
   const today = new Date().toISOString().split('T')[0];
   const upcomingAppts = appointments
@@ -33,9 +50,7 @@ export default function Dashboard() {
     .sort((a, b) => a.start.localeCompare(b.start))
     .slice(0, 5);
 
-  const recentNotes = [...notes]
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, 5);
+  const recentNotes = notes.slice(0, 5);
 
   const highCare = residents.filter(r => r.careLevel === 'High').length;
 

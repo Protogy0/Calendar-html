@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
-  Pill, Plus, Search, CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp, Trash2
+  Pill, Plus, AlertCircle, CheckCircle, XCircle, Trash2
 } from 'lucide-react';
 import {
   getResidents, getMedications, addMedication, deleteMedication, updateMedication,
@@ -15,25 +15,20 @@ const MAR_STATUS = {
   given: { label: 'Given', color: 'bg-green-100 text-green-700', icon: CheckCircle },
   refused: { label: 'Refused', color: 'bg-red-100 text-red-700', icon: XCircle },
   held: { label: 'Held', color: 'bg-amber-100 text-amber-700', icon: AlertCircle },
-  na: { label: 'N/A', color: 'bg-slate-100 text-slate-500', icon: null },
 };
 
-function MARCell({ med, residentId, date, time }) {
-  const records = getMARRecords(residentId, date);
-  const record = records.find(r => r.medicationId === med.id && r.scheduledTime === time);
-  const status = record?.status || null;
+function MARCell({ med, residentId, date, time, marRecords, onRecorded }) {
+  const record = marRecords.find(r => r.medicationId === med.id && r.scheduledTime === time);
+  const status = record?.status ?? null;
+  const [saving, setSaving] = useState(false);
 
-  function cycle() {
+  async function cycle() {
     const order = [null, 'given', 'refused', 'held'];
     const next = order[(order.indexOf(status) + 1) % order.length];
-    if (next === null) {
-      // clear — store as null by just recording again
-      recordMAR({ medicationId: med.id, residentId, date, scheduledTime: time, status: null });
-    } else {
-      recordMAR({ medicationId: med.id, residentId, date, scheduledTime: time, status: next });
-    }
-    // Force re-render hack via key change — parent will refresh
-    window.dispatchEvent(new Event('mar-updated'));
+    setSaving(true);
+    await recordMAR({ medicationId: med.id, residentId, date, scheduledTime: time, status: next });
+    await onRecorded();
+    setSaving(false);
   }
 
   const cfg = status ? MAR_STATUS[status] : null;
@@ -41,8 +36,9 @@ function MARCell({ med, residentId, date, time }) {
   return (
     <button
       onClick={cycle}
+      disabled={saving}
       title={`${med.name} ${time} – click to cycle status`}
-      className={`w-20 h-8 rounded text-xs font-medium border transition-colors ${cfg ? cfg.color + ' border-transparent' : 'border-slate-200 text-slate-400 hover:bg-slate-50'}`}
+      className={`w-20 h-8 rounded text-xs font-medium border transition-colors disabled:opacity-50 ${cfg ? cfg.color + ' border-transparent' : 'border-slate-200 text-slate-400 hover:bg-slate-50'}`}
     >
       {cfg ? cfg.label : time}
     </button>
@@ -135,41 +131,65 @@ function MedForm({ residents, onSave, onClose }) {
 }
 
 export default function Medications() {
-  const residents = getResidents();
-  const [selectedResident, setSelectedResident] = useState(residents[0]?.id || '');
-  const [tab, setTab] = useState('list'); // 'list' | 'mar'
+  const [residents, setResidents] = useState([]);
+  const [meds, setMeds] = useState([]);
+  const [marRecords, setMarRecords] = useState([]);
+  const [selectedResident, setSelectedResident] = useState('');
+  const [tab, setTab] = useState('list');
   const [showForm, setShowForm] = useState(false);
-  const [meds, setMeds] = useState(() => getMedications());
-  const [marTick, setMarTick] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // listen for MAR updates
-  useMemo(() => {
-    const handler = () => setMarTick(t => t + 1);
-    window.addEventListener('mar-updated', handler);
-    return () => window.removeEventListener('mar-updated', handler);
-  }, []);
-
-  const resident = residents.find(r => r.id === selectedResident);
-  const resMeds = meds.filter(m => m.residentId === selectedResident);
   const marDate = new Date().toISOString().split('T')[0];
 
-  function handleAdd(data) {
-    addMedication(data);
-    setMeds(getMedications());
+  useEffect(() => {
+    Promise.all([getResidents(), getMedications()])
+      .then(([r, m]) => {
+        setResidents(r);
+        setMeds(m);
+        setSelectedResident(r[0]?.id || '');
+        setLoading(false);
+      })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedResident) return;
+    getMARRecords(selectedResident, marDate).then(setMarRecords);
+  }, [selectedResident, marDate]);
+
+  async function refreshMAR() {
+    if (!selectedResident) return;
+    const records = await getMARRecords(selectedResident, marDate);
+    setMarRecords(records);
+  }
+
+  async function handleAdd(data) {
+    await addMedication(data);
+    const updated = await getMedications();
+    setMeds(updated);
     setShowForm(false);
   }
 
-  function handleDelete(id) {
+  async function handleDelete(id) {
     if (confirm('Remove this medication?')) {
-      deleteMedication(id);
-      setMeds(getMedications());
+      await deleteMedication(id);
+      const updated = await getMedications();
+      setMeds(updated);
     }
   }
 
-  function toggleActive(id, current) {
-    updateMedication(id, { active: !current });
-    setMeds(getMedications());
+  async function toggleActive(id, current) {
+    await updateMedication(id, { active: !current });
+    const updated = await getMedications();
+    setMeds(updated);
   }
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading…</div>;
+  if (error) return <div className="text-red-600 p-4 text-sm">Error: {error}</div>;
+
+  const resident = residents.find(r => r.id === selectedResident);
+  const resMeds = meds.filter(m => m.residentId === selectedResident);
 
   return (
     <div className="space-y-5">
@@ -291,7 +311,7 @@ export default function Medications() {
                         <th className="px-4 py-3 font-medium" colSpan={5}>Scheduled Times</th>
                       </tr>
                     </thead>
-                    <tbody key={marTick}>
+                    <tbody>
                       {resMeds.filter(m => m.active).map(med => (
                         <tr key={med.id} className="border-t border-slate-100">
                           <td className="px-4 py-3 font-medium text-slate-800">{med.name}</td>
@@ -299,7 +319,15 @@ export default function Medications() {
                           <td className="px-4 py-3">
                             <div className="flex gap-2 flex-wrap">
                               {(Array.isArray(med.times) ? med.times : [med.times]).map(t => (
-                                <MARCell key={t} med={med} residentId={resident.id} date={marDate} time={t} />
+                                <MARCell
+                                  key={t}
+                                  med={med}
+                                  residentId={resident.id}
+                                  date={marDate}
+                                  time={t}
+                                  marRecords={marRecords}
+                                  onRecorded={refreshMAR}
+                                />
                               ))}
                             </div>
                           </td>
@@ -310,7 +338,7 @@ export default function Medications() {
                 </div>
               )}
               <div className="p-4 border-t border-slate-100 flex gap-4 text-xs text-slate-400">
-                {Object.entries(MAR_STATUS).filter(([k]) => k !== 'na').map(([k, v]) => (
+                {Object.entries(MAR_STATUS).map(([k, v]) => (
                   <span key={k} className={`px-2 py-0.5 rounded font-medium ${v.color}`}>{v.label}</span>
                 ))}
               </div>

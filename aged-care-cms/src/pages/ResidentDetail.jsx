@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Edit, Trash2, Pill, FileText, AlertTriangle, Phone, User, Heart } from 'lucide-react';
-import { getResidents, updateResident, deleteResident, getMedications, getNotes } from '../store';
+import { getResident, updateResident, deleteResident, getMedications, getNotes } from '../store';
 import ResidentForm from '../components/ResidentForm';
 
 function InfoRow({ label, value }) {
@@ -17,13 +17,28 @@ function InfoRow({ label, value }) {
 export default function ResidentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [residents, setResidents] = useState(getResidents);
+  const [resident, setResident] = useState(null);
+  const [medications, setMedications] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [showEdit, setShowEdit] = useState(false);
   const [activeTab, setActiveTab] = useState('profile');
 
-  const resident = residents.find(r => r.id === id);
-  const medications = getMedications(id);
-  const notes = getNotes(id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([getResident(id), getMedications(id), getNotes(id)])
+      .then(([r, meds, ns]) => {
+        setResident(r);
+        setMedications(meds);
+        setNotes(ns);
+        setLoading(false);
+      })
+      .catch(err => { setError(err.message); setLoading(false); });
+  }, [id]);
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-slate-400 text-sm">Loading…</div>;
+  if (error) return <div className="text-red-600 p-4 text-sm">Error: {error}</div>;
 
   if (!resident) {
     return (
@@ -34,15 +49,16 @@ export default function ResidentDetail() {
     );
   }
 
-  function handleEdit(data) {
-    updateResident(id, data);
-    setResidents(getResidents());
+  async function handleEdit(data) {
+    await updateResident(id, data);
+    const updated = await getResident(id);
+    setResident(updated);
     setShowEdit(false);
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (confirm(`Are you sure you want to remove ${resident.firstName} ${resident.lastName}?`)) {
-      deleteResident(id);
+      await deleteResident(id);
       navigate('/residents');
     }
   }

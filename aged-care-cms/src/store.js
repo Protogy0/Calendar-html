@@ -1,210 +1,264 @@
-// Simple localStorage-backed data store for Aged Care CMS
+// Async Supabase-backed data store for Aged Care CMS
+import { supabase } from './lib/supabase';
 
-const KEYS = {
-  residents: 'acms_residents',
-  medications: 'acms_medications',
-  marRecords: 'acms_mar',
-  notes: 'acms_notes',
-  vitals: 'acms_vitals',
-  appointments: 'acms_appointments',
+// ─── Column name maps (camelCase JS ↔ snake_case Postgres) ───────────────────
+
+const RESIDENT_MAP = {
+  firstName: 'first_name',
+  lastName: 'last_name',
+  roomNumber: 'room_number',
+  careLevel: 'care_level',
+  admissionDate: 'admission_date',
+  gpPhone: 'gp_phone',
+  nextOfKin: 'next_of_kin',
+  nokRelation: 'nok_relation',
+  nokPhone: 'nok_phone',
+  medicalHistory: 'medical_history',
+  createdAt: 'created_at',
 };
 
-function load(key) {
-  try {
-    const v = localStorage.getItem(key);
-    return v ? JSON.parse(v) : null;
-  } catch { return null; }
-}
+const MED_MAP = {
+  residentId: 'resident_id',
+  startDate: 'start_date',
+  createdAt: 'created_at',
+};
 
-function save(key, data) {
-  localStorage.setItem(key, JSON.stringify(data));
-}
+const MAR_MAP = {
+  medicationId: 'medication_id',
+  residentId: 'resident_id',
+  scheduledTime: 'scheduled_time',
+  updatedAt: 'updated_at',
+};
 
-// ---------- Residents ----------
-export function getResidents() {
-  return load(KEYS.residents) || seedResidents();
-}
+const NOTE_MAP = {
+  residentId: 'resident_id',
+  createdAt: 'created_at',
+};
 
-export function saveResidents(list) {
-  save(KEYS.residents, list);
-}
+const VITALS_MAP = {
+  residentId: 'resident_id',
+  createdAt: 'created_at',
+};
 
-export function addResident(r) {
-  const list = getResidents();
-  const newR = { ...r, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-  saveResidents([...list, newR]);
-  return newR;
-}
+const APPT_MAP = {
+  residentName: 'resident_name',
+  createdAt: 'created_at',
+};
 
-export function updateResident(id, changes) {
-  const list = getResidents().map(r => r.id === id ? { ...r, ...changes } : r);
-  saveResidents(list);
-}
-
-export function deleteResident(id) {
-  saveResidents(getResidents().filter(r => r.id !== id));
-}
-
-// ---------- Medications ----------
-export function getMedications(residentId) {
-  const all = load(KEYS.medications) || [];
-  return residentId ? all.filter(m => m.residentId === residentId) : all;
-}
-
-export function addMedication(med) {
-  const all = load(KEYS.medications) || [];
-  const newMed = { ...med, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-  save(KEYS.medications, [...all, newMed]);
-  return newMed;
-}
-
-export function updateMedication(id, changes) {
-  const all = (load(KEYS.medications) || []).map(m => m.id === id ? { ...m, ...changes } : m);
-  save(KEYS.medications, all);
-}
-
-export function deleteMedication(id) {
-  save(KEYS.medications, (load(KEYS.medications) || []).filter(m => m.id !== id));
-}
-
-// ---------- MAR (Medication Administration Records) ----------
-export function getMARRecords(residentId, date) {
-  const all = load(KEYS.marRecords) || [];
-  return all.filter(r =>
-    (!residentId || r.residentId === residentId) &&
-    (!date || r.date === date)
-  );
-}
-
-export function recordMAR(entry) {
-  const all = load(KEYS.marRecords) || [];
-  const existing = all.findIndex(r =>
-    r.medicationId === entry.medicationId &&
-    r.residentId === entry.residentId &&
-    r.date === entry.date &&
-    r.scheduledTime === entry.scheduledTime
-  );
-  const record = { ...entry, id: existing >= 0 ? all[existing].id : crypto.randomUUID(), updatedAt: new Date().toISOString() };
-  if (existing >= 0) {
-    all[existing] = record;
-  } else {
-    all.push(record);
+function toDb(obj, map) {
+  const result = {};
+  for (const [k, v] of Object.entries(obj)) {
+    result[map[k] || k] = v;
   }
-  save(KEYS.marRecords, all);
-  return record;
+  return result;
 }
 
-// ---------- Clinical Notes ----------
-export function getNotes(residentId) {
-  const all = load(KEYS.notes) || [];
-  return residentId ? all.filter(n => n.residentId === residentId) : all;
+function fromDb(obj, map) {
+  if (!obj) return null;
+  const inverse = Object.fromEntries(Object.entries(map).map(([k, v]) => [v, k]));
+  const result = {};
+  for (const [k, v] of Object.entries(obj)) {
+    result[inverse[k] || k] = v;
+  }
+  return result;
 }
 
-export function addNote(note) {
-  const all = load(KEYS.notes) || [];
-  const newNote = { ...note, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-  save(KEYS.notes, [...all, newNote]);
-  return newNote;
+function fromDbList(list, map) {
+  return (list || []).map(r => fromDb(r, map));
 }
 
-export function deleteNote(id) {
-  save(KEYS.notes, (load(KEYS.notes) || []).filter(n => n.id !== id));
+// ─── Residents ────────────────────────────────────────────────────────────────
+
+export async function getResidents() {
+  const { data, error } = await supabase
+    .from('residents')
+    .select('*')
+    .order('last_name');
+  if (error) throw error;
+  return fromDbList(data, RESIDENT_MAP);
 }
 
-// ---------- Vitals ----------
-export function getVitals(residentId) {
-  const all = load(KEYS.vitals) || [];
-  return residentId ? all.filter(v => v.residentId === residentId) : all;
+export async function getResident(id) {
+  const { data, error } = await supabase
+    .from('residents')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (error) throw error;
+  return fromDb(data, RESIDENT_MAP);
 }
 
-export function addVitals(entry) {
-  const all = load(KEYS.vitals) || [];
-  const newEntry = { ...entry, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-  save(KEYS.vitals, [...all, newEntry]);
-  return newEntry;
+export async function addResident(r) {
+  const { data, error } = await supabase
+    .from('residents')
+    .insert(toDb(r, RESIDENT_MAP))
+    .select()
+    .single();
+  if (error) throw error;
+  return fromDb(data, RESIDENT_MAP);
 }
 
-// ---------- Appointments ----------
-export function getAppointments() {
-  return load(KEYS.appointments) || seedAppointments();
+export async function updateResident(id, changes) {
+  const { error } = await supabase
+    .from('residents')
+    .update(toDb(changes, RESIDENT_MAP))
+    .eq('id', id);
+  if (error) throw error;
 }
 
-export function addAppointment(appt) {
-  const all = getAppointments();
-  const newAppt = { ...appt, id: crypto.randomUUID() };
-  save(KEYS.appointments, [...all, newAppt]);
-  return newAppt;
+export async function deleteResident(id) {
+  const { error } = await supabase
+    .from('residents')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
 }
 
-export function updateAppointment(id, changes) {
-  const all = getAppointments().map(a => a.id === id ? { ...a, ...changes } : a);
-  save(KEYS.appointments, all);
+// ─── Medications ──────────────────────────────────────────────────────────────
+
+export async function getMedications(residentId) {
+  let query = supabase.from('medications').select('*').order('name');
+  if (residentId) query = query.eq('resident_id', residentId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return fromDbList(data, MED_MAP);
 }
 
-export function deleteAppointment(id) {
-  save(KEYS.appointments, getAppointments().filter(a => a.id !== id));
+export async function addMedication(med) {
+  const { data, error } = await supabase
+    .from('medications')
+    .insert(toDb(med, MED_MAP))
+    .select()
+    .single();
+  if (error) throw error;
+  return fromDb(data, MED_MAP);
 }
 
-// ---------- Seed Data ----------
-function seedResidents() {
-  const residents = [
-    {
-      id: crypto.randomUUID(),
-      firstName: 'Mary', lastName: 'Thompson',
-      dob: '1938-04-12', roomNumber: '12A',
-      careLevel: 'High', admissionDate: '2022-03-15',
-      gp: 'Dr. Sarah Mitchell', gpPhone: '(02) 5555-1234',
-      nextOfKin: 'John Thompson', nokRelation: 'Son', nokPhone: '0412 345 678',
-      allergies: 'Penicillin, Sulfa drugs',
-      medicalHistory: 'Type 2 Diabetes, Hypertension, Mild cognitive impairment',
-      dni: false, dnr: true,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: crypto.randomUUID(),
-      firstName: 'Robert', lastName: 'Davies',
-      dob: '1933-11-28', roomNumber: '7B',
-      careLevel: 'High', admissionDate: '2021-08-22',
-      gp: 'Dr. James Wilson', gpPhone: '(02) 5555-5678',
-      nextOfKin: 'Patricia Davies', nokRelation: 'Wife', nokPhone: '0423 456 789',
-      allergies: 'Aspirin, Latex',
-      medicalHistory: 'Parkinson\'s disease, Osteoporosis, COPD',
-      dni: true, dnr: true,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      id: crypto.randomUUID(),
-      firstName: 'Joan', lastName: 'Baker',
-      dob: '1940-07-05', roomNumber: '3C',
-      careLevel: 'Low', admissionDate: '2023-01-10',
-      gp: 'Dr. Sarah Mitchell', gpPhone: '(02) 5555-1234',
-      nextOfKin: 'Susan Baker', nokRelation: 'Daughter', nokPhone: '0434 567 890',
-      allergies: 'None known',
-      medicalHistory: 'Hypertension, Cataracts (post-op), Mild arthritis',
-      dni: false, dnr: false,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-  save(KEYS.residents, residents);
-  // seed medications too
-  const meds = [
-    { id: crypto.randomUUID(), residentId: residents[0].id, name: 'Metformin', dose: '500mg', route: 'Oral', frequency: 'BD', times: ['08:00', '18:00'], indication: 'Type 2 Diabetes', prescriber: 'Dr. Mitchell', startDate: '2022-03-15', active: true, createdAt: new Date().toISOString() },
-    { id: crypto.randomUUID(), residentId: residents[0].id, name: 'Amlodipine', dose: '5mg', route: 'Oral', frequency: 'OD', times: ['08:00'], indication: 'Hypertension', prescriber: 'Dr. Mitchell', startDate: '2022-03-15', active: true, createdAt: new Date().toISOString() },
-    { id: crypto.randomUUID(), residentId: residents[1].id, name: 'Levodopa/Carbidopa', dose: '100/25mg', route: 'Oral', frequency: 'TDS', times: ['07:00', '12:00', '17:00'], indication: 'Parkinson\'s disease', prescriber: 'Dr. Wilson', startDate: '2021-08-22', active: true, createdAt: new Date().toISOString() },
-    { id: crypto.randomUUID(), residentId: residents[2].id, name: 'Perindopril', dose: '4mg', route: 'Oral', frequency: 'OD', times: ['08:00'], indication: 'Hypertension', prescriber: 'Dr. Mitchell', startDate: '2023-01-10', active: true, createdAt: new Date().toISOString() },
-  ];
-  save(KEYS.medications, meds);
-  return residents;
+export async function updateMedication(id, changes) {
+  const { error } = await supabase
+    .from('medications')
+    .update(toDb(changes, MED_MAP))
+    .eq('id', id);
+  if (error) throw error;
 }
 
-function seedAppointments() {
-  const today = new Date();
-  const fmt = d => d.toISOString().split('T')[0];
-  const appts = [
-    { id: crypto.randomUUID(), title: 'Mary T – GP Review', start: fmt(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 3)), residentName: 'Mary Thompson', type: 'GP', location: 'On-site', notes: 'Quarterly diabetes review' },
-    { id: crypto.randomUUID(), title: 'Robert D – Physiotherapy', start: fmt(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7)), residentName: 'Robert Davies', type: 'Allied Health', location: 'Physiotherapy room', notes: 'Parkinson\'s exercise program' },
-    { id: crypto.randomUUID(), title: 'Joan B – Optometry', start: fmt(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 14)), residentName: 'Joan Baker', type: 'Specialist', location: 'Off-site – City Eye Clinic', notes: 'Post-cataract follow up' },
-  ];
-  save(KEYS.appointments, appts);
-  return appts;
+export async function deleteMedication(id) {
+  const { error } = await supabase
+    .from('medications')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
+// ─── MAR Records ──────────────────────────────────────────────────────────────
+
+export async function getMARRecords(residentId, date) {
+  let query = supabase.from('mar_records').select('*');
+  if (residentId) query = query.eq('resident_id', residentId);
+  if (date) query = query.eq('date', date);
+  const { data, error } = await query;
+  if (error) throw error;
+  return fromDbList(data, MAR_MAP);
+}
+
+export async function recordMAR(entry) {
+  const row = toDb(entry, MAR_MAP);
+  const { data, error } = await supabase
+    .from('mar_records')
+    .upsert(row, { onConflict: 'medication_id,resident_id,date,scheduled_time' })
+    .select()
+    .single();
+  if (error) throw error;
+  return fromDb(data, MAR_MAP);
+}
+
+// ─── Clinical Notes ───────────────────────────────────────────────────────────
+
+export async function getNotes(residentId) {
+  let query = supabase
+    .from('clinical_notes')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (residentId) query = query.eq('resident_id', residentId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return fromDbList(data, NOTE_MAP);
+}
+
+export async function addNote(note) {
+  const { data, error } = await supabase
+    .from('clinical_notes')
+    .insert(toDb(note, NOTE_MAP))
+    .select()
+    .single();
+  if (error) throw error;
+  return fromDb(data, NOTE_MAP);
+}
+
+export async function deleteNote(id) {
+  const { error } = await supabase
+    .from('clinical_notes')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
+// ─── Vitals ───────────────────────────────────────────────────────────────────
+
+export async function getVitals(residentId) {
+  let query = supabase
+    .from('vitals')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (residentId) query = query.eq('resident_id', residentId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return fromDbList(data, VITALS_MAP);
+}
+
+export async function addVitals(entry) {
+  const { data, error } = await supabase
+    .from('vitals')
+    .insert(toDb(entry, VITALS_MAP))
+    .select()
+    .single();
+  if (error) throw error;
+  return fromDb(data, VITALS_MAP);
+}
+
+// ─── Appointments ─────────────────────────────────────────────────────────────
+
+export async function getAppointments() {
+  const { data, error } = await supabase
+    .from('appointments')
+    .select('*')
+    .order('start');
+  if (error) throw error;
+  return fromDbList(data, APPT_MAP);
+}
+
+export async function addAppointment(appt) {
+  const { data, error } = await supabase
+    .from('appointments')
+    .insert(toDb(appt, APPT_MAP))
+    .select()
+    .single();
+  if (error) throw error;
+  return fromDb(data, APPT_MAP);
+}
+
+export async function updateAppointment(id, changes) {
+  const { error } = await supabase
+    .from('appointments')
+    .update(toDb(changes, APPT_MAP))
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteAppointment(id) {
+  const { error } = await supabase
+    .from('appointments')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
 }
